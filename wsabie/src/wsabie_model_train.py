@@ -11,6 +11,45 @@ from tensorflow.keras import layers
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"]='2'
 
+def printUsages():
+	print "Usage: python wsabie_model_train.py [options] train_file"
+	print "options:"
+	print "  -val   validation_file (default None)"
+	print "  -save  directory for saving the trained model (default None)"
+	print "  -em    embedding_size: set the size of embedding layer (default 32)"
+	print "  -ep    epoch_num: set the epoch num (default 50)"
+	print "  -al    alpha: set the learning rate (default 0.001)"
+	print "  -b     batch_size: set the batch size (default 128)"
+	print "  -v     verbose: print runing log (default True)"
+
+def parseParameter(argv):
+	if len(argv) < 2: #at least 2 paramters: train.py train_file
+		printUsages()
+		exit(1)
+
+	parameters = {}
+	parameters['train_file'] = argv[-1]
+
+	for i in range(1, len(argv) - 2, 2):
+		if  '-val' == argv[i]:
+			parameters['val'] = argv[i + 1]
+		elif  '-save' == argv[i]:
+			parameters['save'] = argv[i + 1]
+		elif '-em' == argv[i]:
+			parameters['em'] = int(argv[i + 1])
+		elif '-ep' == argv[i]:
+			parameters['ep'] = int(argv[i + 1])
+		elif '-al' == argv[i]:
+			parameters['al'] = float(argv[i + 1])
+		elif '-b' == argv[i]:
+			parameters['b'] = int(argv[i + 1])
+		elif '-v' == argv[i]:
+			if argv[i + 1] in ['True', 'true', '1']:
+				parameters['v'] = True
+			else:
+				parameters['v'] = False
+	return parameters
+
 class DataLoader():
 	'''DataLoader类用于从文件加载数据。
 	文件的第一行格式为m \t n \t b：
@@ -82,16 +121,17 @@ class DataLoader():
 		self.X = tf.concat([self.lX, self.rX], axis=1)
 
 class WSABIE(keras.Model):
-	'''
+	'''WSABIE模型
+	原始WSABIE模型在user-item推荐场景下的变种，也可以认为是只有embedding层的DSSM。
 	left_bow_size：左bow的字典大小
 	right_bow_size：右bow的字典大小
 	left_vec_size：左特征向量维度
 	'''
-	def __init__(self, left_bow_size, right_bow_size, left_vec_size):
+	def __init__(self, left_bow_size, right_bow_size, left_vec_size, embedding_size=32):
 		super(WSABIE, self).__init__(self)
 		self.lwn = left_vec_size
-		self.left_embedding = layers.Embedding(left_bow_size, 32)
-		self.right_embedding = layers.Embedding(right_bow_size, 32)
+		self.left_embedding = layers.Embedding(left_bow_size, embedding_size)
+		self.right_embedding = layers.Embedding(right_bow_size, embedding_size)
 		self.pooling = keras.layers.GlobalAveragePooling1D()
 		# self.left_dense = layers.Dense(16, activation='relu')
 		# self.right_dense = layers.Dense(16, activation='relu')
@@ -117,7 +157,7 @@ class WSABIE(keras.Model):
 		x = self.pooling(x)
 		return x
 
-'''trick的实现，可能是训练速度的瓶颈。'''
+'''丑陋的实现，可能是训练速度的瓶颈。'''
 def pairwise_hinge_loss(out, one_batch):
 	loss = tf.constant([], tf.float32)
 	pos = out[0]
@@ -130,7 +170,7 @@ def pairwise_hinge_loss(out, one_batch):
 		loss = tf.concat([loss, _loss], axis=0)
 	return loss
 
-def train(train_filename, val_filename=None, save_model_dir=None, epoch_num=50, alpha=0.001, batch_size=128, verbose=True):
+def train(train_filename, val_filename=None, save_model_dir=None, embedding_size=32, epoch_num=50, alpha=0.001, batch_size=128, verbose=True):
 	# 加载训练数据
 	train_dl = DataLoader(train_filename)
 	train_dl.load_data()
@@ -152,9 +192,10 @@ def train(train_filename, val_filename=None, save_model_dir=None, epoch_num=50, 
 			val_filename = None
 
 	# 创建模型
-	model = WSABIE(train_dl.left_bow_size, train_dl.right_bow_size, train_dl.left_vec_size)
+	model = WSABIE(train_dl.left_bow_size, train_dl.right_bow_size, train_dl.left_vec_size, embedding_size)
 	model.build(input_shape=(None, train_dl.left_vec_size + train_dl.right_vec_size))
-	model.summary()
+	if verbose:
+		model.summary()
 	optimizer = tf.keras.optimizers.Adam(alpha)
 	train_loss_results = []
 	train_auc_results = []
@@ -187,14 +228,32 @@ def train(train_filename, val_filename=None, save_model_dir=None, epoch_num=50, 
 	# 保存模型
 	if save_model_dir != None:
 		model.save_weights(save_model_dir + 'wsabie_' + time.strftime("%Y%m%d", time.localtime()))
-	return model
 
 if __name__ == '__main__':
-	if len(sys.argv) < 2:
-		print "Usage: python %s train_filename [val_filename]" % sys.argv[0]
-		sys.exit(0)
-	train_filename = sys.argv[1]
+	parameters = parseParameter(sys.argv)
+	train_filename = parameters['train_file']
 	val_filename = None
-	if len(sys.argv) >= 3:
-		val_filename = sys.argv[2]
-	model = train(train_filename, val_filename, epoch_num=10)
+	save_model_dir = None
+	embedding_size = 32
+	epoch_num = 50
+	alpha = 0.001
+	batch_size = 128
+	verbose = True
+	if 'val' in parameters:
+		val_filename = parameters['val']
+	if 'save' in parameters:
+		save_model_dir = parameters['save']
+	if 'em' in parameters:
+		embedding_size = parameters['em']
+	if 'ep' in parameters:
+		epoch_num = parameters['ep']
+	if 'al' in parameters:
+		alpha = parameters['al']
+	if 'b' in parameters:
+		batch_size = parameters['b']
+	if 'v' in parameters:
+		verbose = parameters['v']
+	
+	train(train_filename, val_filename, save_model_dir=save_model_dir,
+			embedding_size=embedding_size, epoch_num=epoch_num, alpha=alpha,
+			batch_size=batch_size, verbose=verbose)
